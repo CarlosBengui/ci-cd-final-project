@@ -1,23 +1,21 @@
 apiVersion: tekton.dev/v1beta1
 kind: Pipeline
 metadata:
-  name: ci-cd-pipeline
+  name: cd-pipeline
 spec:
-  workspaces:
-    - name: output
-
   params:
-    - name: repo-url
-      type: string
-    - name: branch
-      type: string
-      default: main
     - name: app-name
+      type: string
+    - name: git-url
       type: string
     - name: build-image
       type: string
 
+  workspaces:
+    - name: output
+
   tasks:
+
     - name: cleanup
       taskRef:
         name: cleanup
@@ -25,20 +23,21 @@ spec:
         - name: source
           workspace: output
 
-    - name: git-clone
+    - name: clone
+      runAfter:
+        - cleanup
       taskRef:
         name: git-clone
       params:
         - name: url
-          value: $(params.repo-url)
-        - name: revision
-          value: $(params.branch)
+          value: $(params.git-url)
       workspaces:
         - name: output
           workspace: output
 
     - name: lint
-      runAfter: [git-clone]
+      runAfter:
+        - git
       taskRef:
         name: flake8
       workspaces:
@@ -46,7 +45,6 @@ spec:
           workspace: output
 
     - name: test
-      runAfter: [lint]
       taskRef:
         name: nose
       workspaces:
@@ -54,33 +52,21 @@ spec:
           workspace: output
 
     - name: build
-      runAfter: [test]
       taskRef:
         name: buildah
+      params:
+        - name: IMAGE
+          value: $(params.build-image)
       workspaces:
         - name: source
           workspace: output
 
     - name: deploy
-      runAfter: [build]
       taskRef:
         name: openshift-client
       params:
-        - name: ARGS
-          value:
-            - oc
-            - create
-            - deployment
-            - $(params.app-name)
-            - --image=$(params.build-image)
-            - --dry-run=client
-            - -o
-            - yaml
-            - "|"
-            - oc
-            - apply
-            - -f
-            - -
-      workspaces:
-        - name: source
-          workspace: output
+        - name: SCRIPT
+          value: |
+            oc create deployment $(params.app-name) \
+            --image=$(params.build-image) \
+            --dry-run=client -o yaml | oc apply -f -
